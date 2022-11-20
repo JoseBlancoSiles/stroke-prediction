@@ -1,0 +1,577 @@
+---
+title: "Entrega Final Módulo 5 José Siles"
+author: "José siles"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+### CONTEXTO DEL DATASET
+
+Según la Organización Mundial de la Salud (OMS), el derrame cerebral es la segunda causa de muerte más común en todo el mundo, representando un 11% del total de muertes. 
+
+Mediante el siguiente estudio, vamos a intentar predecir cual o cuales son los factores que incrementan la posibildiad de sufrir un derrame cerebral, es decir, que variables están más relacionadas con sufrir un derrame. Para ello, nos vamos a apoyar en un dataset llamado: "healthcare-dataset-stroke-data.csv"
+
+### ANALISIS GENERAL DE LOS DATOS 
+
+```{r}
+# Cargamos las librerias necesarias
+library(tidyverse)
+library(dplyr)
+library(gmodels)
+library(rcompanion)
+library(naniar)
+library(wesanderson)
+library(imbalance)
+library(themis)
+library(recipes)
+library(cowplot)
+library(ggplot2)
+library(ggpubr)
+library(ggridges)
+library(corrplot)
+```
+
+```{r}
+# Leemos el csv en el working directory
+dataset <- read.csv("healthcare-dataset-stroke-data.csv")
+
+# Comprobamos las primeras lineas
+head(dataset)
+
+# resumen del dataset
+summary(dataset)
+
+# dimension del dataset
+dim(dataset)
+```
+```{r}
+# Para las variables categóricas mostramos que valores pueden tomar
+unique(dataset$gender)
+unique(dataset$work_type)
+unique(dataset$Residence_type)
+unique(dataset$smoking_status)
+
+# Mostramos tambien la frecuencia de las variables categóricas, por si hubiera alguna que fuera despreciable
+table(dataset$gender)
+table(dataset$work_type)
+table(dataset$Residence_type)
+table(dataset$smoking_status)
+```
+Vemos que la variable gender toma valores de hombre o mujer, menos en un caso. Al ser únicamente 1 de 5000, lo dropeamos del dataset para obtener mejores visualizaciones de los datos.
+
+```{r}
+dataset <- dataset[!(dataset$gender == "Other"),]
+```
+
+Vemos que hay 1544 valores desconocidos en la columna de smoking_status, es el segundo valor más repetido en la columna de smoking_status. Más tarde veremos que hacer con estos casos.
+
+El dataset está formado por 5510 filas y 12 columnas, las cuales reprensentan las variables siguientes:
+
+id: Identificador del paciente.
+
+gender: Género del paciente hombre, mujer u otro.
+
+age: Edad del paciente.
+
+hypertension: Si el paciente padece hipertension se le asigna un 1, sino un 0.
+
+ever_married: Si el paciente se casó se le asigna un 1, sino un 0.
+
+work_type: Tipo de trabajo del paciente, empresa privada, autónomo, funcionario, niño/a, nunca trabajó.
+
+Residence_type: Tipo de residencia del paciente, urbana o rural.
+
+avg_glucose_level: Nivel medio de glucosa en sangre del paciente.
+
+smoking_status: Si el paciente fumó pero lo dejó: formerly smoker, si nunca fumó: never smoked, si fuma: smokes, desconocido: Unknown.
+
+stroke: Si el paciente ha sufrido un derrame se le asigna un 1, sino un 0. 
+
+Todas las variables son de tipo char, a excepción de nivel_medio_glucosa, bmi y age que son de tipo double e id que es de tipo int.
+
+
+### PREPROCESADO DE LOS DATOS
+
+### ANALIZAR NA VALUES 
+
+
+Lo primero que llama la atención, es que la variable "bmi" es de tipo "chr", cuando lo lógico es que fuera de tipo numérico, concretamente "dbl". Podría ser que fuera porque contiene NA. 
+
+```{r}
+#Comprobamos NA values por cada columna
+dataset$bmi <- as.double(dataset$bmi)
+colSums(is.na(dataset)) 
+```
+Vemos que el dataset tiene 201 NA values que corresponden, como habíamos previsto, a la variable bmi. Más tarde veremos que hacer con estos valores faltantes.
+
+```{r}
+# Reemplazamos los valores "Unknown" de la variable smoking_status con NA
+dataset <- replace_with_na(dataset, replace = list(smoking_status = "Unknown"))
+
+#Comprobamos que se ha efectuado el cambio
+colSums(is.na(dataset)) 
+```
+Para el caso de los 201 NA en la variable bmi. vamos a reemplazar los NA por la media de la variable "bmi".
+```{r}
+# Graficamos el la variable bmi antes de reemplazar los NA.
+histograma_bmi_NA <- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset, 
+                                         aes(x = bmi), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + 
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold")) + ylim(0,1000)+
+                          labs(y = "Count", x = "BMI", title = "Distribución BMI inicial")
+
+# Reemplazamos los valores NA en la variable "bmi" por la media de la variable:
+dataset$bmi[is.na(dataset$bmi)] <- mean(dataset$bmi, na.rm = TRUE)
+
+# Graficamos la variable bmi despues de reemplazar los NA.
+histograma_bmi_sin_NA <- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset, 
+                                         aes(x = bmi), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + 
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold")) + ylim(0,1000)+
+                          labs(y = "Count", x = "BMI", title = "Distribución BMI sin NA")
+
+plot_grid(histograma_bmi_NA, histograma_bmi_sin_NA)
+```
+
+Vemos que la distribución de la variable antes y después del reemplazo de los NA values por la media, es bastante parecida. Por lo cual, consideramos correcto este método, ya que, si bien es cierto que en ambos casos la variable no se distriubuye de forma simétrica (está ligeramente desplazada hacia la derecha), es una buena aproximación para este problema.
+
+Para popular los NA de la variable smoking_status, Vamos a usar la función fill(). Aunque también podríamos, simplemente, popular los NA con el valor más repetido de la variable smoking_status. Considero más ajustada la primera opción.
+
+```{r}
+# Gráfico distribución de la variable smoking status_inicial, con valores NA.
+plot_bar_relacion_NA <- dataset %>% 
+  ggplot() +
+  aes(y = "") +
+  geom_bar(fill = "Lightblue")+
+  xlim(0,3000)+
+  facet_grid("smoking_status")+
+  ggtitle("Distribución smoking status con NA")
+
+# Reemplaza los NA values de smoking status por los adyacentes que toma la variable.
+dataset <- dataset %>%
+  fill(smoking_status) 
+
+# Gráfico distribución de la variable smoking_status sin valores NA.
+plot_bar_relacion_sin_NA <- dataset %>% 
+  ggplot() +
+  aes(y = "") +
+  geom_bar(fill = "Lightblue")+
+  xlim(0,3000)+
+  ggtitle("dataset")+
+  facet_grid("smoking_status")+ggtitle("Distribución smoking status sin NA")
+
+plot_grid(plot_bar_relacion_NA, plot_bar_relacion_sin_NA)
+``` 
+
+Vemos que la proporción parece haberse mantenido bastante bien, por lo que consideramos correcto este método. También podríamos haber hecho, simplemente, reemplazar los NA por el valor que más se repite, en este caso never_smoked. Pero la primera solución es mas acertada.
+
+
+## ANALISIS VARIABLE OBJETIVO
+
+Para predecir si una persona va a sufrir un derrame, la variable stroke es la variable objetivo. Vamos a ver como se distribuye esta variable en nuestro dataset, ahora ya sin missing values.
+
+```{r}
+# Convertimos la variable stroke a factor, ya que solo puede tomar la variable 1 o 0.Convertimos hypertension y heart_desease también a factor. Nos servirá más adelante.
+
+levels(dataset$stroke)
+dataset$stroke <- factor(dataset$stroke)
+
+levels(dataset$hypertension)
+dataset$hypertension <- factor(dataset$hypertension)
+
+levels(dataset$heart_disease)
+dataset$heart_disease <- factor(dataset$heart_disease)
+
+# Graficamos la distribucion de la variable.
+stroke_plot <- dataset %>%
+              ggplot() +
+              geom_bar(aes(x = stroke, fill = stroke), position = "dodge", width = 0.5) + 
+              theme_minimal() + 
+              theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5)) +
+              labs(x = "Tuvo un derrame",title = "Distribución variable stroke")
+stroke_plot
+
+#Analizamos con más precisión cuantos valores nos sirven para el estudio.
+CrossTable(dataset$stroke)
+```
+
+Vemos que únicamente un 5%, aproximadamente, de todos los pacientes han sufrido un derrame cerebral.
+Dado que el objetivo principal de este proyecto es determinar cuales son las personas que pueden sufrir un derrame cerebral, debemos buscar alguna manera de balancear el dataset para que la relación entre stroke = 1 y stroke = 0, no sea tan grande.
+
+
+Para resolver este tipo de inconvenientes, existen varios métodos. El que voy a utilizar es smotenc(). Esta función de library(themis) agrega valores de la clase minoritaria, en este caso dataset$stroke = 1, generando nuevos ejemplos usando los vecinos de este, y funciona para datasets mixtos con valores categóricos y númericos como es este caso. Para ver más información sobre este método de oversampling, por favor, consulta : https://search.r-project.org/CRAN/refmans/themis/html/step_smotenc.html
+
+```{r} 
+# Populamos la clase minoritaria, en este caso hasta igualar a la clase mayoritaria (over_ratio = 1)
+dataset_oversampled <- smotenc(dataset, var = "stroke", over_ratio = 1)
+
+Derrame_oversampled_plot <- dataset_oversampled %>%
+              ggplot() +
+              geom_bar(aes(x = stroke, fill = stroke), position = "dodge") + 
+              scale_fill_manual(values = c(wes_palette("Royal2")[2], wes_palette("Royal2")[5])) +
+              theme_minimal() + 
+              theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5)) +
+              labs(x = "Tuvo Derrame", title = "Distribución variable stroke")
+
+Derrame_oversampled_plot
+```
+
+
+
+Vemos que ahora tenemos el mismo número de pacientes con derrame = 1, que derrame = 0.
+
+Para comprobar si el oversample que hemos propuesto tiene sentido, vamos a analizar la distribucion de las variables antes y despues de éste. Empezamos con las categóricas:
+
+```{r}
+# Graficamos la distribución de la variable género antes y después del oversample.
+gender_plot <- dataset %>%
+               ggplot() +
+               geom_bar(aes(x = gender, fill = gender), position = "dodge") +ylim(0,6000)+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+               legend.position = "None") +
+               labs(y = "Count", x = "Gender", title = "Distribución Género")
+
+gender_plot_oversampled <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = gender, fill = gender), position = "dodge") + ylim(0,6000)+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+               legend.position = "None")+
+               labs(y = "Count", x = "Gender", title = "Distribución Género oversampled")
+
+# Graficamos la distribución de la variable hipertensión antes y después del oversample.
+hipertension_plot <- dataset %>%
+               ggplot() +
+               geom_bar(aes(x = hypertension, fill = hypertension), position = "dodge")+ ylim(0,8000)+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+               legend.position = "None") +
+               labs(y = "Count", x = "Tiene hipertension", title = "Distribución Hipertensión")
+
+hipertension_plot_oversampled <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = hypertension, fill = hypertension), position = "dodge") + 
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+               legend.position = "None")+
+               labs(y = "Count", x = "Tiene Hipertensión", title = "Distribución Hipertensión oversampled")
+
+# Graficamos la distribución de la variable heart_desease antes y después del oversample
+heart_desease_plot <- dataset %>%
+               ggplot() +
+               geom_bar(aes(x = heart_disease, fill = heart_disease), position = "dodge")+ ylim(0,9000)+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5,size = 10),
+               legend.position = "None") +
+               labs(y = "Count", x = "Tiene enfermedad corazón", title = "Distribución Enfermedad corazón")
+
+heart_desease_plot_oversampled <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = heart_disease, fill = heart_disease), position = "dodge") + ylim(0,9000)+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+               legend.position = "None")+
+               labs(y = "Count", x = "Tiene enfermedad corazón", title = "Distribución Enfermedad corazón oversampled")
+
+# Graficamos la distribución de la variable residence_type antes y después del oversample
+residence_plot <- dataset %>%
+               ggplot() +
+               geom_bar(aes(x = Residence_type, fill = Residence_type), position = "dodge")+ylim(0,6000)+ 
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5,size = 10),
+               legend.position = "None") +
+               labs(y = "Count", x = "Tipo residiencia", title = "Distribución tipo residencia")
+
+residence_plot_oversampled <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = Residence_type, fill = Residence_type), position = "dodge")+ylim(0,6000)+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+               legend.position = "None")+
+               labs(y = "Count", x = "Tipo residencia", title = "Distribución tipo residencia oversampled")
+
+ggarrange(gender_plot, 
+          gender_plot_oversampled, 
+          hipertension_plot, 
+          hipertension_plot_oversampled,
+          heart_desease_plot,
+          heart_desease_plot_oversampled,
+          residence_plot,
+          residence_plot_oversampled,
+          ncol = 2,
+          nrow = 2
+)
+```
+
+Vemos que, pese al haber aumentado el tamaño del dataset para balancear los 1 en stroke, la proporción entre las variables categóricas ha sido bastante respetada.
+
+Y las variables numéricas, como se habrán visto afectadas después del oversample?
+```{r}
+# Graficamos la variable bmi antes y despues del oversample.
+histograma_bmi<- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset, 
+                                         aes(x = bmi), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + 
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold")) + ylim(0,3000)+
+                          labs(y = "Count", x = "BMI", title = "Distribución BMI sin NA")
+                          
+histograma_bmi_oversampled <- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset_oversampled, 
+                                         aes(x = bmi), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + ylim(0,3000)+
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5))+ 
+                          labs(y = "Count", x = "BMI", title = "Distribución BMI oversampled")
+
+# Graficamos la variable avg_glucose_level antes y despues del oversample
+histograma_glucosa <- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset, 
+                                         aes(x = avg_glucose_level), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + ylim(0,1500)+
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold",hjust = 0.5)) +
+                          labs(y = "Count", x = "Nivel medio glucosa", title = "Distribución")
+
+histograma_glucosa_oversampled <- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset_oversampled, 
+                                         aes(x = avg_glucose_level), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + 
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5)) + ylim(0,1500)+
+                          labs(y = "Count", x = "Nivel medio glucosa", title = "Distribución oversampled")
+
+# Recuperamos el histograma calculado anteriormente y lo mostramos junto con el que acabamos de calcular.
+histograma_age <- dataset %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset, 
+                                         aes(x = age), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + ylim(0,1500)+
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold",hjust = 0.5)) +
+                          labs(y = "Count", x = "age", title = "Distribución")
+
+histograma_age_oversampled <- dataset_oversampled %>%
+                          ggplot() + 
+                          geom_histogram(data = dataset_oversampled, 
+                                         aes(x = age), 
+                                         binwidth = , 
+                                         fill = wes_palette("IsleofDogs1")[1], color = "gray") + 
+                          theme_minimal() + 
+                          theme(plot.title = element_text(size = 15, face = "bold", hjust = 0.5)) + ylim(0,1500)+
+                          labs(y = "Count", x = "age", title = "Distribución oversampled")
+
+
+plot_grid(histograma_bmi, histograma_bmi_oversampled)
+
+plot_grid(histograma_glucosa ,histograma_glucosa_oversampled)
+
+plot_grid(histograma_age, histograma_age_oversampled)
+
+```
+
+
+Vemos que las variables no -  categóricas han aceptado coherentemente el oversample. Por lo tanto, el oversample con SMOTE-NC propuesto, ha sido acertado. 
+
+
+### Estudio de la variable obejtivo STROKE
+
+Vamos a ver como se comportan las variables de estudio en función de stroke
+A partir de ahora trabajaremos con dataset_oversampled únicamente.
+
+# Variables no numéricas
+
+```{r}
+# Graficamos genero en función de si sufrió o no stroke
+stroke_gender_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = gender, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Gender", title = "Distribución Género por stroke")
+
+# Graficamos hipertensión en función de si sufrió o no stroke
+stroke_hipertension_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = hypertension, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Hipertensión", title = "Distribución hipertensión por stroke")
+
+# Graficamos enfermedad corazón en función de si sufrió o no stroke
+stroke_corazon_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = heart_disease, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Enfermedad Corazón", title = "Distribución enfermedad corazón por stroke")
+
+# Graficamos ever_married en función de si sufrió o no stroke
+stroke_casado_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = ever_married, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Casado/a", title = "Distribución casado/a por stroke")
+
+# Graficamos tipo residencia en función de si sufrió o no stroke
+stroke_residencia_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = Residence_type, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Tipo residencia", title = "Distribución tipo residencia por stroke")
+
+ggarrange(stroke_gender_plot, stroke_hipertension_plot, stroke_corazon_plot, stroke_casado_plot, stroke_residencia_plot,ncol = 2)
+
+```
+
+```{r}
+# Graficamos tipo trabajo en función de si sufrió o no stroke
+stroke_trabajo_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = work_type, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[1], wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3]
+                                            , wes_palette("GrandBudapest2")[4], wes_palette("GrandBudapest2")[5])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Tipo trabajo", title = "Distribución tipo trabajo por stroke")
+
+# Graficamos relación del paciente con el tabaco en función de si sufrió o no stroke
+stroke_tabaco_plot <- dataset_oversampled %>%
+               ggplot() +
+               geom_bar(aes(x = smoking_status, fill = stroke), position = "fill")+
+               scale_fill_manual(values = c(wes_palette("GrandBudapest2")[1], wes_palette("GrandBudapest2")[2], wes_palette("GrandBudapest2")[3]
+                                            , wes_palette("GrandBudapest2")[4], wes_palette("GrandBudapest2")[5])) +
+               theme_minimal() + 
+               theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))+
+               labs(y = "Proportion", x = "Relación con tabaco", title = "Distribución relación tabaco por stroke")
+
+ggarrange(stroke_tabaco_plot,stroke_trabajo_plot, ncol = 1)
+```
+
+De los gráficos anteriores se ve que las variables que no influyen en la probabilidad de sufrir un derrame son:
+
+- Género
+- Tipo residencia
+
+Las variables que influyen ligeramente en tener un derrame son:
+
+- Relación del paciente con el tabaco, especialmente si ha fumado en el transcurso de su vida.
+
+Las variables que claramente influyen en la probabilidad de sufrir un derrame son:
+
+- Hipertensión
+- Enfermedad corazón
+- Estar casado (probablemente relacionado con la edad del paciente, a más edad más posibilidad de haberse casado)
+- tipo de trabajo, especialmente si el paciente es autónomo o trabaja para un empresa privada.
+
+# Variables numéricas
+
+```{r}
+# Graficamos la distribución de la variable edad vari función de si el pacientesufrió derrame
+stroke_age_plot <- dataset_oversampled %>%
+            ggplot() +
+            geom_density_ridges_gradient(aes(x = age, y = stroke, fill = stroke), scale = 2, rel_min_height = 0.001) +
+            scale_fill_manual(values = c(wes_palette("Royal2")[2], wes_palette("Royal2")[5])) +
+            theme_minimal() +
+            labs(x = "Age (years)", y = "Stroke" , title = "Casos de paciente con derrame en función de la edad")
+
+stroke_bmi_plot <- dataset_oversampled %>%
+            ggplot() +
+            geom_density_ridges_gradient(aes(x = bmi, y = stroke, fill = stroke), scale = 2, rel_min_height = 0.001) +
+            scale_fill_manual(values = c(wes_palette("Royal2")[2], wes_palette("Royal2")[5])) +
+            theme_minimal() +
+            labs(x = "BMI", y = "Stroke" , title = "Casos de paciente con derrame en función del valor BMI")
+
+stroke_glucose_plot <- dataset_oversampled %>%
+            ggplot() +
+            geom_density_ridges_gradient(aes(x = avg_glucose_level, y = stroke, fill = stroke), scale = 2, rel_min_height = 0.001) +
+            scale_fill_manual(values = c(wes_palette("Royal2")[2], wes_palette("Royal2")[5])) +
+            theme_minimal() +
+            labs(x = "Nivel medio glucosa", y = "Stroke" , title = "Casos de paciente con derrame en función del valor medio de glucosa")
+
+stroke_age_plot
+stroke_bmi_plot
+stroke_glucose_plot
+```
+
+
+
+De los gráficos anteriores se afirma que una edad avanzada y un nivel alto de glucosa en sangre son indicadores de que el paciente pueda sufrir un derrame cerebral. Sin embargo, no parece haber indicios que relacionen el íncide de masa corporal (BMI) con la posibilidad de sufrir un derrame cerebral.
+
+Podemos ver también si existe relación entre las variables númericas
+```{r}
+cor(dataset_oversampled[,sapply(dataset_oversampled, is.numeric)])
+```
+
+No hay relaciones claras entre las diferentes variables numéricas.
+
+### CONCLUSIONES
+
+Se ha resuelto el problema planteado, identificar aquellas variables de los pacientes que son más susceptibles de producir un derrame cerebral.
+
+Aún hay muchas preguntas que resolver, por ejemplo, las relaciones entre otras variables, detección de outliers (por ejemplo, en el gráfico de la distribución de BMI aparecen, aunque pocos, valores de BMI muy altos que pueden ser un error),... Pero el enunciado indica que nos ciñamos a responder a una pregunta y así hemos hecho. Queda pendiente ampliar el estudio como curiosidad.
+
+Se ha tenido que popular la variable stroke = 1 para estudiar mejor las variables que conllevan a sufrir un derrame.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
